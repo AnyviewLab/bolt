@@ -119,6 +119,9 @@ func (n *node) prevSibling() *node {
 }
 
 // put inserts a key/value.
+// 在叶子节点插入用户数据时，oldKey=newKey，此时俩参数是有冗余的
+// 在spill阶段调整b+树时，oldKey可能不等于newKey。是为了避免在叶子结点最左侧插入一个很小值引起祖先节点node.key的链式更新
+// 而将更新延迟到最后b+树的调整阶段spill进行统一处理
 func (n *node) put(oldKey, newKey, value []byte, pgid pgid, flags uint32) {
 	if pgid >= n.bucket.tx.meta.pgid {
 		panic(fmt.Sprintf("pgid (%d) above high water mark (%d)", pgid, n.bucket.tx.meta.pgid))
@@ -127,17 +130,17 @@ func (n *node) put(oldKey, newKey, value []byte, pgid pgid, flags uint32) {
 	} else if len(newKey) <= 0 {
 		panic("put: zero-length new key")
 	}
-
-	// Find insertion index.
+	
+	// 找到插入点
 	index := sort.Search(len(n.inodes), func(i int) bool { return bytes.Compare(n.inodes[i].key, oldKey) != -1 })
 
-	// Add capacity and shift nodes if we don't have an exact match and need to insert.
+	// 如果key是新增的，而非替换的，需要为待插入点腾出空间
 	exact := (len(n.inodes) > 0 && index < len(n.inodes) && bytes.Equal(n.inodes[index].key, oldKey))
 	if !exact {
 		n.inodes = append(n.inodes, inode{})
 		copy(n.inodes[index+1:], n.inodes[index:])
 	}
-
+	// 给要替换/插入的元素赋值
 	inode := &n.inodes[index]
 	inode.flags = flags
 	inode.key = newKey
@@ -388,9 +391,11 @@ func (n *node) spill() error {
 		node.spilled = true
 
 		// Insert into parent inodes.
+		// 如果不是根节点
+		// 将最左边的 node.key 更新为 node.inodes[0].key：
 		if node.parent != nil {
-			var key = node.key
-			if key == nil {
+			var key = node.key	// split后的最左边node
+			if key == nil {		// split后不是最左边node
 				key = node.inodes[0].key
 			}
 
