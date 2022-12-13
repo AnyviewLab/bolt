@@ -50,6 +50,7 @@ func (tx *Tx) init(db *DB) {
 	db.meta().copy(tx.meta)
 
 	// Copy over the root bucket.
+	// 拷贝并初始化root bucket，以此来作为动态加载修改路径上node的入口
 	tx.root = newBucket(tx)
 	tx.root.bucket = &bucket{}
 	*tx.root.bucket = tx.meta.root
