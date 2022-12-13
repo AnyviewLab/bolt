@@ -6,18 +6,24 @@ import (
 	"sort"
 	"unsafe"
 )
+// node.go
+// node.go封装了对node所存元素和node间关系的相关操作，包括节点内所存元素的增删、加载和写盘，访问孩子兄弟元素，拆分合并节点的详细逻辑
 
 // node represents an in-memory, deserialized page.
+// node是内存中反序列化后page的抽象，即内存中b+树中的节点的抽象，但是一个节点可以对应到多个页（如果多个页的话，会构成溢出啥的）
 type node struct {
-	bucket     *Bucket
-	isLeaf     bool
-	unbalanced bool
-	spilled    bool
-	key        []byte
-	pgid       pgid
-	parent     *node
-	children   nodes
-	inodes     inodes
+	bucket     *Bucket // 所在bucket的指针
+	isLeaf     bool    // 用于标记是否为叶子节点
+	// 调整和维持b+树时使用
+	unbalanced bool    // 标记是否需要合并
+	spilled    bool    // 标记是否需要进行节点拆分和落盘
+	
+	key        []byte  // 所包含第一个元素的key
+	pgid       pgid    // 对应的page id
+	parent     *node   // 父节点指针
+	children   nodes   // 孩子节点指针，只包含加载到内存中的部分孩子
+	inodes     inodes  // 所存元素的元信息
+			   // 如果是分支节点的话就是key+page id数组，如果是叶子节点就是普通的kv数组
 }
 
 // root returns the top-level node this node is attached to.
@@ -159,10 +165,12 @@ func (n *node) del(key []byte) {
 
 // read initializes the node from a page.
 func (n *node) read(p *page) {
+	// 初始化元数据
 	n.pgid = p.id
 	n.isLeaf = ((p.flags & leafPageFlag) != 0)
 	n.inodes = make(inodes, int(p.count))
-
+	
+	// 加载所包含元素 inodes
 	for i := 0; i < int(p.count); i++ {
 		inode := &n.inodes[i]
 		if n.isLeaf {
@@ -173,11 +181,12 @@ func (n *node) read(p *page) {
 		} else {
 			elem := p.branchPageElement(uint16(i))
 			inode.pgid = elem.pgid
+			// 所指向分支页的起始key
 			inode.key = elem.key()
 		}
 		_assert(len(inode.key) > 0, "read: zero-length inode key")
 	}
-
+	// 用第一个元素的key作为该node的key，以便于spill时父节点以此来索引进行查找和路由
 	// Save first key so we can find the node in the parent when we spill.
 	if len(n.inodes) > 0 {
 		n.key = n.inodes[0].key
@@ -591,14 +600,18 @@ func (s nodes) Len() int           { return len(s) }
 func (s nodes) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
 func (s nodes) Less(i, j int) bool { return bytes.Compare(s[i].inodes[0].key, s[j].inodes[0].key) == -1 }
 
-// inode represents an internal node inside of a node.
-// It can be used to point to elements in a page or point
-// to an element which hasn't been added to a page yet.
+// inode 表示b+树节点中的内部节点，分支节点与叶子节点复用同一结构体
+// 对于分支节点而言，单个元素为key+pageid；对于叶子节点而言，单个元素为用户的kv数据
+// 简单来说，一个inode对应的是一个key/value pair，当然，bucket也是一个inode，value就是page id，flags使用bucketLeafFlag标志（bucketLeafFlag = 0x01）
+// inode会在b+树路由-二分查找时使用到
 type inode struct {
-	flags uint32
-	pgid  pgid
-	key   []byte
-	value []byte
+	flags uint32    // 标识类型，共有数据
+	// 分支节点使用
+	pgid  pgid	// 指向分支节点或叶子节点的page id
+			// 不是*node是因为inode的元素不一定被加载到内存中。 
+	key   []byte	// key，共有数据
+	// 叶子结点使用
+	value []byte	// 叶子节点所存数据
 }
 
 type inodes []inode
