@@ -421,6 +421,8 @@ func (n *node) spill() error {
 // rebalance attempts to combine the node with sibling nodes if the node fill
 // size is below a threshold or if there are not enough keys.
 func (n *node) rebalance() {
+	// 1. 避免重复调整
+	// 2. 按需调整
 	if !n.unbalanced {
 		return
 	}
@@ -430,6 +432,7 @@ func (n *node) rebalance() {
 	n.bucket.tx.stats.Rebalance++
 
 	// Ignore if node is above threshold (25%) and has enough keys.
+	// 判断是否需要merge，不需要择结束
 	var threshold = n.bucket.tx.db.pageSize / 4
 	if n.size() > threshold && len(n.inodes) > n.minKeys() {
 		return
@@ -438,6 +441,7 @@ func (n *node) rebalance() {
 	// Root node has special handling.
 	if n.parent == nil {
 		// If root node is a branch and only has one node then collapse it.
+		// 将其与唯一的孩子节点合并
 		if !n.isLeaf && len(n.inodes) == 1 {
 			// Move root's child up.
 			child := n.bucket.node(n.inodes[0].pgid, n)
@@ -462,6 +466,7 @@ func (n *node) rebalance() {
 	}
 
 	// If node has no keys then just remove it.
+	// 直接删除该节点
 	if n.numChildren() == 0 {
 		n.parent.del(n.key)
 		n.parent.removeChild(n)
@@ -518,6 +523,7 @@ func (n *node) rebalance() {
 	}
 
 	// Either this node or the target node was deleted from the parent so rebalance it.
+	// 这次调整可能导致节点删除，需要向上递归查看是否需要进一步调整
 	n.parent.rebalance()
 }
 
